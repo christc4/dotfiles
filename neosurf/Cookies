@@ -1,0 +1,11 @@
+# NetSurf cookies file.
+#
+# Lines starting with a '#' are comments, blank lines are ignored.
+#
+# All lines prior to "Version:	102" are discarded.
+#
+# Version	Domain	Domain from Set-Cookie	Path	Path from Set-Cookie	Secure	HTTP-Only	Expires	Last used	No destroy	Name	Value	Value was quoted	Scheme	URL	Comment
+Version:	102
+0	github.com	0	/	1	1	0	1738497483	1706891922	0	_octo	GH1.1.181977200.1706875083	0	https	https://github.com/christc4/christc4.github.io	
+0	github.com	0	/	1	1	1	1738497483	1706891922	0	logged_in	no	0	https	https://github.com/christc4/christc4.github.io	
+0	.animepahe.ru	1	/	1	0	1	1738417124	1706881122	0	__ddgid_	NbGAYetszGf728ZL	0	unused	unused	

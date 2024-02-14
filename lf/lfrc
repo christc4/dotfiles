@@ -1,0 +1,228 @@
+set shellopts '-eu'
+set ifs "\n"
+set scrolloff 10
+set icons
+set period 1
+set hiddenfiles ".*:*.aux:*.log:*.bbl:*.bcf:*.blg:*.run.xml"
+set ratios 1:2:3
+set sixel
+# Set previewer but make sure cache folder is in place
+&{{ [ ! -d "$XDG_CACHE_HOME/lf" ] && mkdir --parents "$XDG_CACHE_HOME/lf" }}
+set previewer '~/.config/lf/preview'
+# make sure changing directories updates the titlebar
+cmd on-cd &{{
+    printf "\033]7;file://$HOSTNAME$PWD\007" > /dev/tty
+    printf "\033]0; $PWD\007" > /dev/tty
+}}
+on-cd
+
+cmd open ${{
+    case $(file --mime-type "$(readlink -f $f)" -b) in
+	image/vnd.djvu|application/pdf|application/octet-stream|application/postscript) setsid -f zathura $fx >/dev/null 2>&1 ;;
+        text/*|application/json|application/javascript|inode/x-empty) $EDITOR $fx;;
+	image/svg+xml) imv $f ;;
+	image/*) rotdir $f | grep -i "\.\(png\|jpg\|jpeg\|gif\|webp\|tif\|ppm\|ico\)\(_large\)*$" |
+		setsid -f imv 2>/dev/null | while read -r file; do
+			[ -z "$file" ] && continue
+			lf -remote "send select \"$file\""
+			lf -remote "send toggle"
+		done &
+		;;
+	audio/*) mpv --audio-display=no $f ;;
+	video/*|application/vnd.rn-realmedia) setsid -f mpv $f -quiet >/dev/null 2>&1 ;;
+	application/pdf|application/vnd.djvu|application/epub*) setsid -f zathura $fx >/dev/null 2>&1 ;;
+	application/pgp-encrypted) $EDITOR $fx ;;
+        *) for f in $fx; do setsid -f $OPENER $f >/dev/null 2>&1; done;;
+    esac
+}}
+
+cmd mkdir %{{
+    printf "Directory Name: "
+    read dir
+    mkdir -p "$dir"
+    lf -remote "send $id cd \"$dir\""
+}}
+
+cmd mkfile %{{
+  printf "File Name: "
+  read ans
+  lf -remote "send $id $ $EDITOR \"$ans\""
+}}
+
+cmd makeowner %{{
+    echo -n "New owner: " 
+    read usr && sudo chown -R "$usr" "$f" && echo -n "File: $f has new owner: $usr"
+    lf -remote "send $id :reload"
+}}
+
+cmd makeworkspace %{{
+    echo -n "Workspace name (empty for $(basename "$PWD")): " 
+    read ans
+    [ -z "$ans" ] && ans=$(basename "$PWD")
+    nvim --headless -c ":lua require('workspaces').add('$ans', '$PWD');" -c ":q"
+}}
+
+# Archive bindings
+cmd unarchive ${{
+  case "$f" in
+      *.zip) unzip "$f" ;;
+      *.tar.gz) tar -xzvf "$f" ;;
+      *.gz) gunzip "$f" ;;
+      *.tar.bz2) tar -xjvf "$f" ;;
+      *.tar) tar -xvf "$f" ;;
+      *) echo "Unsupported format" ;;
+  esac
+}}
+
+# Trash bindings
+cmd trash ${{
+  files=$(printf "$fx" | tr '\n' ';')
+  while [ "$files" ]; do
+    file=${files%%;*}
+    trash-put "$(basename "$file")"
+    if [ "$files" = "$file" ]; then
+      files=''
+    else
+      files="${files#*;}"
+    fi
+  done
+}}
+
+cmd travelToSymlink ${{
+	dest=$(realpath $f)
+	if [ -f "$dest" ]; then
+	 whereExactly=$(basename "$dest")
+	 dest=$(dirname "$dest") 
+	 lf -remote "send $id :cd '$dest'; select '$whereExactly'"
+	else
+	 lf -remote "send $id cd '$dest'"
+	fi
+}}
+
+cmd symlinkSelectedHere %{{ 
+    if [ -z $fs ]; then
+        echo -ne "\033[41;1mNo items selected for symlinking"
+    else
+	for s in $fs
+	do 
+	  ln -s "$s" .
+	done
+    fi;
+}}
+
+cmd open_terminal_here &{{ 
+  if [ -z ${TMUX+x} ]; then 
+  	setsid -f $TERMINAL >/dev/null 2>&1
+  else
+	tmux split-window -c $PWD 
+  fi
+}}
+
+cmd watchInPlaylistSelected ${{
+	mpv $fs
+}}
+
+cmd sendTo %{{
+  [ -z $fs ] && echo "No files selected" && exit 1
+  if [ -z "$WAYLAND_DISPLAY" ]; then
+      echo "Rsync recipient: "
+      read ans
+  else 
+    ans=$(cat "$XDG_DATA_HOME/receivers" | bemenu -p "rsync recipient: " ||  exit 1)
+  fi
+  case "$ans" in
+        *: ) ;;
+        * ) ans="$ans:" ;;
+  esac;
+  echo "Sending to $ans"
+  rsync -r $fs "${ans}" >/dev/null && echo "$ans Received!" || echo "$ans Error Occured"
+}}
+
+cmd bulkrename ${{
+    tmpfile_old="$(mktemp)"
+    tmpfile_new="$(mktemp)"
+
+    [ -n "$fs" ] && fs=$(basename -a $fs) || fs=$(ls)
+
+    echo "$fs" > "$tmpfile_old"
+    echo "$fs" > "$tmpfile_new"
+    $EDITOR "$tmpfile_new"
+
+    [ "$(wc -l < "$tmpfile_old")" -eq "$(wc -l < "$tmpfile_new")" ] || { rm -f "$tmpfile_old" "$tmpfile_new"; exit 1; }
+
+    paste "$tmpfile_old" "$tmpfile_new" | while IFS="$(printf '\t')" read -r src dst
+    do
+        [ "$src" = "$dst" ] || [ -e "$dst" ] || mv -- "$src" "$dst"
+    done
+
+    rm -f "$tmpfile_old" "$tmpfile_new"
+    lf -remote "send $id unselect"
+}}
+
+
+cmd tag-clear :tag; tag-toggle
+
+# two command which get called externally
+cmd invim source "~/.config/lf/invim"
+
+# Binds mapped to the commands
+map M
+map Md mkdir
+map Mf mkfile
+map Me &chmod u+x $f && lf -remote "send :reload" # make executable
+map Mo makeowner 
+map Mw makeworkspace 
+map au unarchive
+map DD trash
+map Dr $trash-restore
+map <c-l> travelToSymlink
+map P symlinkSelectedHere
+map <c-t> open_terminal_here
+map W watchInPlaylistSelected
+map Yd &echo $PWD | wl-copy; lf -remote "send $id echo 'Yanked dir $PWD to clipboard" # cd into the copied path
+map Yf &echo $f | wl-copy; lf -remote "send $id echo 'Yanked file $f to clipboard" # cd into the copied path
+map Ya &wl-copy < $f; lf -remote "send $id echo 'Yanked all $f to clipboard'" #yank all contents 
+map T tag-clear 
+map <c-r> :reload; &killall bat
+map Su $sudo lf -command 'source "~/.config/lf/insudo"';
+
+# Other less complex binds
+
+map w # Don't really need to enter shell on w, I usually just quit lf
+# Instead, make w chose some predefined filters
+map wc setfilter 
+map wp setfilter ".pdf"
+map wi filter
+
+map O :set dirpreviews!; reload # O as in overview, this turns the third column into tree output
+
+# Basic Functions
+map . set hidden!
+map <enter> open
+map R push :rename<enter><c-k>.
+map B bulkrename
+map Z middle
+map am $addshortcut $f
+map o &mimeopener "$f"
+map <tab> push ''
+map gcl $git clone "$(wl-paste)"
+
+# call qr sharing in the current folder
+map Us &setsid -f qrshare $fx >/dev/null 2>&1
+map Ur &setsid -f qrshare -r >/dev/null 2>&1
+
+map <c-f> $lf -remote "send $id select \"$(fzf)\"" # fuzzy find files
+map <c-e> $lf -remote "send $id select \"$(FZF_DEFAULT_COMMAND='fd -td' fzf)\"" # fuzzy find directories
+map <c-g> $nvim -c ":lua startInTelescopeOnly()" # live grep files
+map <c-s> sendTo
+
+map C $git diff $f
+
+map e
+map ee $nvim -c ":lua startInDebug()"
+map ei $nvim $f
+# Other tips
+# Remember ' is a special mark which saves the previous path , so by pressing double '' you get back to the previous folder, i.e. using mark-load
+cmd on-quit-prepare cmd on-quit ${{exec zsh}}
+
+source "~/.config/lf/shortcutrc"
